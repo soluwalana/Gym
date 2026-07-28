@@ -146,12 +146,12 @@ def validate_image_pull_policy(image_pull_policy: str) -> str:
     return image_pull_policy
 
 
-def _require_opensandbox_sdk() -> tuple[Any, Any, Any, Any, Any]:
+def _require_opensandbox_sdk() -> tuple[Any, Any, Any, Any, Any, Any]:
     try:
         from opensandbox import Sandbox
         from opensandbox.config import ConnectionConfig
         from opensandbox.models.execd import RunCommandOpts
-        from opensandbox.models.sandboxes import PlatformSpec, Volume
+        from opensandbox.models.sandboxes import NetworkPolicy, PlatformSpec, Volume
     except ModuleNotFoundError as e:
         raise ModuleNotFoundError(
             "OpenSandbox SDK is required for the opensandbox sandbox provider. "
@@ -159,7 +159,7 @@ def _require_opensandbox_sdk() -> tuple[Any, Any, Any, Any, Any]:
             "env.sandbox.provider.name=opensandbox."
         ) from e
 
-    return Sandbox, ConnectionConfig, RunCommandOpts, PlatformSpec, Volume
+    return Sandbox, ConnectionConfig, RunCommandOpts, PlatformSpec, Volume, NetworkPolicy
 
 
 def _require_tenacity() -> tuple[Any, Any, Any, Any]:
@@ -365,18 +365,12 @@ def _normalize_spec(spec: SandboxSpec) -> SandboxSpec:
 
 
 def _to_platform_spec(platform: dict[str, Any]) -> Any:
-    _, _, _, PlatformSpec, _ = _require_opensandbox_sdk()
+    _, _, _, PlatformSpec, _, _ = _require_opensandbox_sdk()
     return PlatformSpec(**platform)
 
 
-def _to_network_policy(network_policy: Mapping[str, Any]) -> Any:
-    from opensandbox.models.sandboxes import NetworkPolicy
-
-    return NetworkPolicy.model_validate(network_policy)
-
-
 def _to_volumes(volumes: list[Mapping[str, Any]]) -> list[Any]:
-    _, _, _, _, Volume = _require_opensandbox_sdk()
+    _, _, _, _, Volume, _ = _require_opensandbox_sdk()
     return [Volume(**dict(volume)) for volume in volumes]
 
 
@@ -386,6 +380,16 @@ def _to_image_spec(image: str, image_auth: Mapping[str, Any] | None) -> Any:
     from opensandbox.models.sandboxes import SandboxImageAuth, SandboxImageSpec
 
     return SandboxImageSpec(image, auth=SandboxImageAuth(**dict(image_auth)))
+
+
+def _to_network_policy(policy: Mapping[str, Any]) -> Any:
+    """Build an SDK ``NetworkPolicy`` from a plain mapping.
+
+    ``model_validate`` rather than ``**kwargs`` so both field names and wire aliases
+    (``defaultAction``) are accepted and nested egress rules are coerced.
+    """
+    _, _, _, _, _, NetworkPolicy = _require_opensandbox_sdk()
+    return NetworkPolicy.model_validate(dict(policy))
 
 
 def _to_sandbox_status(state: Any) -> SandboxStatus:
@@ -519,7 +523,21 @@ class OpenSandboxAttributionConfig:
 
 @dataclass(frozen=True)
 class OpenSandboxCreateConfig:
-    """OpenSandbox create/reconnect retry settings."""
+    """OpenSandbox create/reconnect retry settings.
+
+    ``network_policy`` is a provider-level outbound egress policy applied to every sandbox this
+    provider creates, shaped like the sidecar ``/policy`` body::
+
+        network_policy:
+          defaultAction: deny
+          egress:
+            - {action: allow, target: "pypi.org"}
+
+    It can only be set at create time -- the SDK's post-create egress calls merge rules but
+    explicitly preserve ``defaultAction``, so a sandbox created without a policy can never be
+    tightened afterwards. Leaving this unset means no egress policy is sent, which for OpenSandbox
+    means the sandbox is created with unrestricted outbound network access.
+    """
 
     request_timeout_s: int | None = None
     timeout_s: float | None = None
@@ -533,6 +551,7 @@ class OpenSandboxCreateConfig:
     # Refresh a created sandbox's TTL while this provider owns its handle.
     # This does not change task/command timeouts or renew borrowed handles.
     renew_interval_s: float | None = None
+    network_policy: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if self.image_pull_policy is not None:
@@ -946,7 +965,7 @@ class OpenSandboxProvider:
         self,
         request_timeout_s: int | float | None = None,
     ) -> Any:
-        _, ConnectionConfig, _, _, _ = _require_opensandbox_sdk()
+        _, ConnectionConfig, _, _, _, _ = _require_opensandbox_sdk()
         kwargs: dict[str, Any] = {}
         if self._connection.domain is not None:
             # OpenSandbox SDK 0.1.15 appends ``/v1`` directly. Normalizing here
@@ -1058,7 +1077,7 @@ class OpenSandboxProvider:
         paused sandbox has no exec daemon to check; resume rebuilds its
         endpoints and performs the health check instead.
         """
-        Sandbox, _, _, _, _ = _require_opensandbox_sdk()
+        Sandbox, _, _, _, _, _ = _require_opensandbox_sdk()
         sandbox_id = str(descriptor["sandbox_id"])
         timeout_s = self._create.connect_attempt_timeout_s
         # A cancelled SDK call skips its own transport cleanup; see resume().
@@ -1156,7 +1175,7 @@ class OpenSandboxProvider:
         unknown: reconnect and check ``status()`` before retrying. See
         ``pause()`` for what happens to PTY sessions.
         """
-        Sandbox, _, _, _, _ = _require_opensandbox_sdk()
+        Sandbox, _, _, _, _, _ = _require_opensandbox_sdk()
         timeout_s = self._operations.pause_resume_timeout_s
         # Hold the config: cancellation skips the SDK's own cleanup, which would
         # leak an SDK-owned default transport. Closing our shared one is a no-op.
@@ -1395,7 +1414,7 @@ class OpenSandboxProvider:
         if timeout_s is None:
             timeout_s = self._create.connect_attempt_timeout_s
 
-        Sandbox, _, _, _, _ = _require_opensandbox_sdk()
+        Sandbox, _, _, _, _, _ = _require_opensandbox_sdk()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + float(timeout_s)
         last_exception: BaseException | None = None
@@ -1496,7 +1515,7 @@ class OpenSandboxProvider:
             spec.ttl_s is None or self._create.renew_interval_s >= spec.ttl_s
         ):
             raise ValueError("create.renew_interval_s requires a longer, explicit sandbox ttl_s")
-        Sandbox, _, _, _, _ = _require_opensandbox_sdk()
+        Sandbox, _, _, _, _, _ = _require_opensandbox_sdk()
         options = OpenSandboxProviderOptions.from_mapping(spec.provider_options)
 
         kwargs: dict[str, Any] = {
@@ -1524,6 +1543,8 @@ class OpenSandboxProvider:
             kwargs["entrypoint"] = spec.entrypoint
         if options.platform is not None:
             kwargs["platform"] = _to_platform_spec(options.platform)
+        if self._create.network_policy is not None:
+            kwargs["network_policy"] = _to_network_policy(self._create.network_policy)
         if options.network_policy is not None:
             kwargs["network_policy"] = _to_network_policy(options.network_policy)
         if options.volumes:
@@ -1651,7 +1672,7 @@ class OpenSandboxProvider:
         retries: int | None = None,
     ) -> SandboxExecResult:
         """Run a command inside an OpenSandbox sandbox."""
-        _, _, RunCommandOpts, _, _ = _require_opensandbox_sdk()
+        _, _, RunCommandOpts, _, _, _ = _require_opensandbox_sdk()
 
         opts_kwargs: dict[str, Any] = {}
         if cwd is not None:
@@ -1795,7 +1816,7 @@ class OpenSandboxProvider:
         path ``stdout`` carries both streams and ``stderr`` is set only when the
         sandbox itself reports an error.
         """
-        _, _, RunCommandOpts, _, _ = _require_opensandbox_sdk()
+        _, _, RunCommandOpts, _, _, _ = _require_opensandbox_sdk()
         background_opts = dict(opts_kwargs)
         background_opts["background"] = True
 

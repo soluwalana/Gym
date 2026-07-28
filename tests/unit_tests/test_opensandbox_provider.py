@@ -239,6 +239,18 @@ class FakeSandbox:
         return None
 
 
+class FakeNetworkPolicy:
+    def __init__(self, **kwargs: Any) -> None:
+        self.kwargs = kwargs
+
+    @classmethod
+    def model_validate(cls, policy: dict[str, Any]) -> "FakeNetworkPolicy":
+        return cls(**policy)
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, FakeNetworkPolicy) and other.kwargs == self.kwargs
+
+
 @pytest.fixture
 def fake_opensandbox_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeSandbox.connected_state = "RUNNING"
@@ -246,8 +258,8 @@ def fake_opensandbox_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
     FakeSandbox.resumed_args = ()
     FakeSandbox.resumed_kwargs = {}
 
-    def require_sdk() -> tuple[Any, Any, Any, Any, Any]:
-        return FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object
+    def require_sdk() -> tuple[Any, Any, Any, Any, Any, Any]:
+        return FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy
 
     monkeypatch.setattr(opensandbox_provider, "_require_opensandbox_sdk", require_sdk)
 
@@ -281,7 +293,7 @@ def test_sdk_missing_sandbox_terminate_warning_is_silenced(caplog: pytest.LogCap
 
 
 def test_sdk_import_helpers_and_retry_classification() -> None:
-    assert len(opensandbox_provider._require_opensandbox_sdk()) == 5
+    assert len(opensandbox_provider._require_opensandbox_sdk()) == 6
     assert len(opensandbox_provider._require_tenacity()) == 4
 
     class StatusCodeError(Exception):
@@ -370,9 +382,12 @@ async def test_provider_conversion_helpers(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (object, object, object, FakePlatformSpec, FakeVolume),
+        lambda: (object, object, object, FakePlatformSpec, FakeVolume, FakeNetworkPolicy),
     )
     assert opensandbox_provider._to_volumes([{"name": "workspace"}]) == [FakeVolume(name="workspace")]
+    assert opensandbox_provider._to_network_policy({"defaultAction": "deny"}) == FakeNetworkPolicy(
+        defaultAction="deny"
+    )
 
 
 async def test_direct_create_passes_platform_to_sdk_create(
@@ -947,7 +962,7 @@ async def test_exec_file_operations_and_reference_validation(monkeypatch: pytest
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (object, object, FakeRunCommandOpts, object, object),
+        lambda: (object, object, FakeRunCommandOpts, object, object, FakeNetworkPolicy),
     )
 
     provider = opensandbox_provider.OpenSandboxProvider(
@@ -1537,7 +1552,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (FailingConnectSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (FailingConnectSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(
         create={"connect_attempt_timeout_s": 0.01, "connect_poll_s": 0.01},
@@ -1563,7 +1578,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (CancelledConnectSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (CancelledConnectSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(probe={"command": None})
     with pytest.raises(asyncio.CancelledError):
@@ -1581,7 +1596,14 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (NonRetryableConnectSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (
+            NonRetryableConnectSandbox,
+            FakeConnectionConfig,
+            object,
+            FakePlatformSpec,
+            object,
+            FakeNetworkPolicy,
+        ),
     )
     provider = opensandbox_provider.OpenSandboxProvider(probe={"command": None})
     with pytest.raises(ValueError, match="bad connection request"):
@@ -1593,7 +1615,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(
         connection={"request_timeout_s": 3},
@@ -1612,7 +1634,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (TimeoutSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (TimeoutSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(
         create={"timeout_s": 0.01},
@@ -1629,7 +1651,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (EmptyCreateSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (EmptyCreateSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(probe={"command": None})
     with pytest.raises(RuntimeError, match="returned no sandbox handle"):
@@ -1638,7 +1660,7 @@ async def test_create_once_and_connect_after_create_error_paths(
     monkeypatch.setattr(
         opensandbox_provider,
         "_require_opensandbox_sdk",
-        lambda: (FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object),
+        lambda: (FakeSandbox, FakeConnectionConfig, object, FakePlatformSpec, object, FakeNetworkPolicy),
     )
     provider = opensandbox_provider.OpenSandboxProvider(probe={"command": "probe"})
     cleanup_calls: list[str] = []
@@ -2422,3 +2444,34 @@ async def test_shared_memory_metadata_reaches_create_api(fake_opensandbox_sdk, s
     provider = OpenSandboxProvider(attribution={"enabled": False}, probe={"command": None})
     await provider.create(SandboxSpec(image="image:tag", metadata={"nemo.nvidia.com/shm": size}))
     assert FakeSandbox.created_kwargs["metadata"]["nemo.nvidia.com/shm"] == size
+
+
+async def test_network_policy_is_sent_at_create_when_configured(fake_opensandbox_sdk: None) -> None:
+    # Egress can only be established at create: the SDK's post-create calls merge rules but
+    # preserve defaultAction, so a sandbox created without a policy cannot be tightened later.
+    policy = {
+        "defaultAction": "allow",
+        "egress": [
+            {"action": "deny", "target": "10.0.0.0/8"},
+            {"action": "deny", "target": "169.254.0.0/16"},
+        ],
+    }
+    provider = opensandbox_provider.OpenSandboxProvider(
+        create={"skip_health_check": True, "network_policy": policy},
+        probe={"command": None},
+    )
+
+    await provider._create_once(SandboxSpec(image="image:tag"))
+
+    assert FakeSandbox.created_kwargs["network_policy"] == FakeNetworkPolicy(**policy)
+
+
+async def test_network_policy_is_omitted_when_unset(fake_opensandbox_sdk: None) -> None:
+    provider = opensandbox_provider.OpenSandboxProvider(
+        create={"skip_health_check": True},
+        probe={"command": None},
+    )
+
+    await provider._create_once(SandboxSpec(image="image:tag"))
+
+    assert "network_policy" not in FakeSandbox.created_kwargs
