@@ -76,6 +76,9 @@ class BrokerErrorCode(str, Enum):
     PAYLOAD_TOO_LARGE = "payload_too_large"
     UNSUPPORTED_OPERATION = "unsupported_operation"
     BACKEND_ERROR = "backend_error"
+    # The broker is tearing down and will not provision anything further. Existing episodes can
+    # still be operated on and closed; only creation is refused.
+    SHUTTING_DOWN = "shutting_down"
 
 
 def validate_base64(value: str) -> str:
