@@ -125,6 +125,12 @@ def list_providers() -> list[str]:
     return sorted({*_PROVIDER_REGISTRY, *_BUILTIN_PROVIDER_LOADERS, *_entry_point_loaders()})
 
 
+def _load_broker_provider() -> ProviderClass:
+    from nemo_gym.sandbox.providers.broker import BrokerProvider
+
+    return BrokerProvider
+
+
 def _load_daytona_provider() -> ProviderClass:
     from nemo_gym.sandbox.providers.daytona import DaytonaProvider
 
@@ -156,6 +162,7 @@ def _load_ecs_fargate_provider() -> ProviderClass:
 
 
 _BUILTIN_PROVIDER_LOADERS["apptainer"] = _load_apptainer_provider
+_BUILTIN_PROVIDER_LOADERS["broker"] = _load_broker_provider
 _BUILTIN_PROVIDER_LOADERS["daytona"] = _load_daytona_provider
 _BUILTIN_PROVIDER_LOADERS["docker"] = _load_docker_provider
 _BUILTIN_PROVIDER_LOADERS["ecs_fargate"] = _load_ecs_fargate_provider
