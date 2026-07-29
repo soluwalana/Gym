@@ -53,6 +53,13 @@ BROKER_PROTOCOL_VERSION = "1"
 
 BROKER_AUTH_HEADER = "OPENSANDBOX-EPISODE-BROKER-AUTH"
 
+# How the job-sandbox runtime tells NeMo-Gym's public sandbox API to route to a broker. Named here,
+# in the contract both sides share, so the process that sets them and the process that reads them
+# cannot drift apart. Setting the URL is what turns brokered mode on; see
+# ``nemo_gym.sandbox.api`` for why that switch is a compatibility mechanism and not a security one.
+BROKER_URL_ENV = "NEMO_GYM_SANDBOX_BROKER_URL"
+BROKER_TOKEN_ENV = "NEMO_GYM_SANDBOX_BROKER_TOKEN"
+
 HEALTH_PATH = "/health"
 EPISODES_PATH = "/episodes"
 EPISODE_PATH = "/episodes/{episode_id}"

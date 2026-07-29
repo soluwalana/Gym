@@ -17,6 +17,8 @@
 from nemo_gym.sandbox.broker.wire import (
     BROKER_AUTH_HEADER,
     BROKER_PROTOCOL_VERSION,
+    BROKER_TOKEN_ENV,
+    BROKER_URL_ENV,
     EPISODE_EXEC_PATH,
     EPISODE_FILES_PATH,
     EPISODE_PATH,
@@ -43,6 +45,8 @@ from nemo_gym.sandbox.broker.wire import (
 __all__ = [
     "BROKER_AUTH_HEADER",
     "BROKER_PROTOCOL_VERSION",
+    "BROKER_TOKEN_ENV",
+    "BROKER_URL_ENV",
     "EPISODES_PATH",
     "EPISODE_EXEC_PATH",
     "EPISODE_FILES_PATH",

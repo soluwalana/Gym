@@ -12,9 +12,28 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Provider-neutral public sandbox API."""
+"""Provider-neutral public sandbox API.
+
+Normally a sandbox is created by the provider the caller names. Inside a GRPO job sandbox it is
+not: the runtime sets :data:`BROKER_URL_ENV`, and every sandbox is then provisioned by a trusted
+episode broker over HTTP, whatever provider the caller asked for. Agents and custom environments
+keep their existing ``Sandbox`` / ``AsyncSandbox`` call sites and need no edit.
+
+Why the caller's choice is overridden rather than honoured: environment code is user-authored and
+uploaded. Asking it to select a broker, or rewriting the provider config of every uploaded
+environment, would put the decision on the side that must not make it.
+
+**This switch is a compatibility mechanism, not a security control.** Code inside the job sandbox
+can clear the environment variable and get the direct path back -- and gains nothing by it, because
+the job sandbox holds no backend credential. What makes brokered mode safe is the absence of that
+credential and the broker's own validation of everything it is sent; this module only ensures the
+honest majority of environments keep working without being rewritten. Do not build an invariant on
+top of it.
+"""
 
 import asyncio
+import logging
+import os
 import tempfile
 import threading
 import time
@@ -25,6 +44,7 @@ from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from typing import Any, TypeVar
 
+from nemo_gym.sandbox.broker.wire import BROKER_TOKEN_ENV, BROKER_URL_ENV
 from nemo_gym.sandbox.providers import (
     ConnectableProvider,
     SandboxEndpoint,
@@ -51,11 +71,43 @@ from nemo_gym.telemetry.gym_metrics import (
 from nemo_gym.telemetry.span_groups import GymSpanGroup
 
 
+LOGGER = logging.getLogger(__name__)
+
 T = TypeVar("T")
 SYNC_OPERATION_TIMEOUT_S = 3600.0
 # Matches the providers' non-process exec sentinel (see docker provider).
 SANDBOX_PTY_RUNTIME_RETURN_CODE = 125
 SYNC_LOOP_CLOSE_TIMEOUT_S = 5.0
+
+_BROKERED_MODE_LOGGED = False
+
+
+def _brokered_provider() -> SandboxProvider | None:
+    """Return a broker-backed provider if the runtime configured one, else ``None``.
+
+    Read fresh on every construction rather than cached at import: the sandbox runtime may set
+    these after NeMo-Gym is imported, and tests need to turn brokered mode on and off.
+    """
+    global _BROKERED_MODE_LOGGED
+
+    base_url = os.environ.get(BROKER_URL_ENV, "").strip()
+    if not base_url:
+        return None
+    token = os.environ.get(BROKER_TOKEN_ENV, "").strip()
+    if not token:
+        raise ValueError(
+            f"{BROKER_URL_ENV} is set but {BROKER_TOKEN_ENV} is empty, so sandboxes would be "
+            f"brokered with no way to authenticate. The job-sandbox runtime sets both or neither."
+        )
+
+    from nemo_gym.sandbox.providers.broker import BrokerProvider
+
+    if not _BROKERED_MODE_LOGGED:
+        # Once per process: which sandbox path is in force is the first thing you want to know
+        # when reading a job log, and the last thing you want repeated per episode.
+        LOGGER.info(f"Sandboxes are brokered via {base_url}; configured sandbox providers are ignored.")
+        _BROKERED_MODE_LOGGED = True
+    return BrokerProvider(base_url=base_url, token=token)
 
 
 def _pty_timeout_result(command: str, timeout_s: float | int | None, *, reusable: bool) -> SandboxExecResult:
@@ -398,8 +450,16 @@ class AsyncSandbox:
         *,
         owns_provider: bool = True,
     ) -> None:
-        self._provider = create_provider(provider) if isinstance(provider, Mapping) else provider
-        self._owns_provider = owns_provider
+        brokered = _brokered_provider()
+        if brokered is not None:
+            # Overrides an already-constructed provider instance too, not just a config mapping:
+            # the point is that the sandbox does not choose, and an instance is just as much a
+            # choice as a name. The broker client is new, so this sandbox owns it.
+            self._provider = brokered
+            self._owns_provider = True
+        else:
+            self._provider = create_provider(provider) if isinstance(provider, Mapping) else provider
+            self._owns_provider = owns_provider
         self._spec = spec
         self._handle: SandboxHandle | None = None
         self._stopped = True
