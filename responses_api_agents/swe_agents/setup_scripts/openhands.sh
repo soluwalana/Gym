@@ -52,13 +52,24 @@ $miniforge_dir/bin/python -m pip install -q 'packaging==26.0'
 # Install jq as a static binary (avoid conda solver changing other package versions)
 if [ ! -f "$miniforge_dir/bin/jq" ]; then
     echo "Installing jq static binary..."
-    curl -fsSL https://github.com/jqlang/jq/releases/download/jq-1.8.1/jq-linux-amd64 -o "$miniforge_dir/bin/jq"
+    jq_arch=$(uname -m)
+    case "$jq_arch" in
+        arm64|aarch64) jq_target="jq-linux-arm64" ;;
+        amd64|x86_64)  jq_target="jq-linux-amd64" ;;
+        *)
+            echo "ERROR: cannot determine jq target for arch '$jq_arch'"
+            exit 1
+            ;;
+    esac
+    curl -fsSL "https://github.com/jqlang/jq/releases/download/jq-1.8.1/$jq_target" -o "$miniforge_dir/bin/jq"
     chmod +x "$miniforge_dir/bin/jq"
 fi
 
+# No `|| true` here: an unrunnable jq (e.g. an x86-64 binary on arm64) used to pass this check
+# silently and only surface much later, inside a build step that uses it.
 echo "Verifying jq installation..."
 which jq
-jq --version || true
+jq --version
 
 
 # Verify installations
@@ -104,41 +115,57 @@ export PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.venv' | tr '\n' ':' | sed 
 # Configure poetry to create virtualenv in the project directory (so it's mounted in container)
 export POETRY_VIRTUALENVS_IN_PROJECT=true
 
-# Retry `make build` with a timeout guard on the first attempt
+# Discard the state a killed/failed `make build` leaves behind, so the retry is a real retry.
+# OpenHands' own `make clean` only removes openhands/.cache - it never touches the poetry venv.
+# A build interrupted during `poetry install` leaves partial VCS checkouts under .venv/src (poetry
+# clones git dependencies to <venv>/src/<repo>); poetry reuses those on the next run instead of
+# re-cloning, so a half-written checkout fails every subsequent attempt with
+# "does not appear to be a Python project: no pyproject.toml or setup.py". Only .venv/src is
+# removed - the rest of the venv is expensive to rebuild and poetry reconciles it fine.
+reset_openhands_build() {
+    make clean || true
+    rm -rf .venv/src
+}
+
+# Retry `make build`, with a timeout guard on every attempt so a wedged build cannot hang the
+# setup indefinitely. The guard must be generous: a full OpenHands build resolves and installs
+# the whole poetry dependency set plus the frontend, which takes tens of minutes - and longer on
+# arm64, where much of that set has no prebuilt wheel and compiles from source. Override with
+# MAKE_BUILD_TIMEOUT_SECONDS if a slower environment needs more.
 MAX_MAKE_BUILD_ATTEMPTS=2
-MAKE_BUILD_TIMEOUT_SECONDS=$((2 * 60))
+MAKE_BUILD_TIMEOUT_SECONDS=${MAKE_BUILD_TIMEOUT_SECONDS:-$((60 * 60))}
 MAKE_BUILD_TIMEOUT_MINUTES=$((MAKE_BUILD_TIMEOUT_SECONDS / 60))
 
 attempt=1
-while [ "$attempt" -le "$MAX_MAKE_BUILD_ATTEMPTS" ]; do
+while :; do
     echo "Running make build (attempt $attempt/$MAX_MAKE_BUILD_ATTEMPTS)..."
 
-    if [ "$attempt" -lt "$MAX_MAKE_BUILD_ATTEMPTS" ]; then
-        if timeout "$MAKE_BUILD_TIMEOUT_SECONDS" make build; then
-            echo "make build completed successfully."
-            break
-        fi
+    # Capture the status here rather than after an `if`: a failed `if cmd; then ...; fi` with no
+    # else branch leaves $? at 0, which is how this loop used to report "exit code 0" on failure.
+    exit_code=0
+    timeout "$MAKE_BUILD_TIMEOUT_SECONDS" make build || exit_code=$?
 
-        exit_code=$?
-        if [ "$exit_code" -eq 124 ]; then
-            echo "make build timed out after $MAKE_BUILD_TIMEOUT_MINUTES minutes."
-        else
-            echo "make build failed with exit code $exit_code."
-        fi
-
-        echo "Retrying make build after cleanup..."
-        make clean || true
-        attempt=$((attempt + 1))
-        continue
-    fi
-
-    if make build; then
+    if [ "$exit_code" -eq 0 ]; then
         echo "make build completed successfully."
         break
     fi
 
-    exit_code=$?
-    echo "make build failed on the final attempt with exit code $exit_code."
+    if [ "$exit_code" -eq 124 ]; then
+        echo "make build timed out after $MAKE_BUILD_TIMEOUT_MINUTES minutes."
+    else
+        echo "make build failed with exit code $exit_code."
+    fi
+
+    # Bail out instead of looping: the attempt counter used to stop advancing once it reached
+    # MAX_MAKE_BUILD_ATTEMPTS, so a persistent failure re-ran the final attempt forever.
+    if [ "$attempt" -ge "$MAX_MAKE_BUILD_ATTEMPTS" ]; then
+        echo "make build failed after $MAX_MAKE_BUILD_ATTEMPTS attempts; giving up."
+        exit "$exit_code"
+    fi
+
+    echo "Retrying make build after cleanup..."
+    reset_openhands_build
+    attempt=$((attempt + 1))
 done
 
 # Install Python dependencies with poetry
