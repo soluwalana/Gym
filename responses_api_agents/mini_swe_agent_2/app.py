@@ -853,7 +853,6 @@ class MiniSWEAgent(SimpleResponsesAPIAgent):
                     run_golden=run_golden,
                     instance_id=instance_id,
                     config=config_path,
-                    # TODO: add this later
                     instance_dict=body.model_dump(),
                     responses_create_params=json.dumps(responses_create_params_dict),
                     step_timeout=step_timeout,
