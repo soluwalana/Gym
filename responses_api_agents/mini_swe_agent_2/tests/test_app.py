@@ -401,6 +401,82 @@ class TestApp:
             },
         )
 
+    def test_split_trajectory_attaches_training_token_ids_to_tool_only_turn(self) -> None:
+        """Tool-only assistant turns must keep generation_token_ids for GRPO."""
+        _, output_items, _ = _split_trajectory_for_responses(
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "user"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {"id": "call-1", "function": {"name": "bash", "arguments": '{"command":"ls"}'}}
+                    ],
+                    "prompt_token_ids": [1, 2, 3],
+                    "generation_token_ids": ["10", "11"],
+                    "generation_log_probs": [-0.1, -0.2],
+                },
+                {"role": "tool", "tool_call_id": "call-1", "content": "ok"},
+            ]
+        )
+
+        assert [item["type"] for item in output_items] == ["function_call", "function_call_output"]
+        function_call = output_items[0]
+        assert function_call["call_id"] == "call-1"
+        assert function_call["prompt_token_ids"] == [1, 2, 3]
+        assert function_call["generation_token_ids"] == [10, 11]
+        assert function_call["generation_log_probs"] == [-0.1, -0.2]
+        assert "generation_token_ids" not in output_items[1]
+
+    def test_split_trajectory_reads_provider_specific_fields(self) -> None:
+        _, output_items, _ = _split_trajectory_for_responses(
+            [
+                {"role": "user", "content": "user"},
+                {
+                    "role": "assistant",
+                    "content": "final answer",
+                    "provider_specific_fields": {
+                        "prompt_token_ids": [7, 8],
+                        "generation_token_ids": [9],
+                        "generation_log_probs": [-0.5],
+                        "routed_experts": [[[0, 1]]],
+                    },
+                },
+            ]
+        )
+
+        assert len(output_items) == 1
+        assert output_items[0]["type"] == "message"
+        assert output_items[0]["generation_token_ids"] == [9]
+        assert output_items[0]["prompt_token_ids"] == [7, 8]
+        assert output_items[0]["generation_log_probs"] == [-0.5]
+        assert output_items[0]["routed_experts"] == [[[0, 1]]]
+
+    def test_split_trajectory_preserves_training_fields_on_response_objects(self) -> None:
+        _, output_items, _ = _split_trajectory_for_responses(
+            [
+                {"role": "user", "content": "user"},
+                {
+                    "object": "response",
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "name": "bash",
+                            "call_id": "call-9",
+                            "arguments": "{}",
+                            "prompt_token_ids": [1],
+                            "generation_token_ids": [2, 3],
+                            "generation_log_probs": [-0.1, -0.2],
+                        }
+                    ],
+                },
+            ]
+        )
+
+        assert output_items[0]["generation_token_ids"] == [2, 3]
+        assert output_items[0]["prompt_token_ids"] == [1]
+
     def test_misc_mini_swe_helpers(self, monkeypatch, tmp_path) -> None:
         assert _swebench_image_name({"instance_id": "django__django-1"}, "verified") == (
             "docker.io/swebench/sweb.eval.x86_64.django_1776_django-1:latest"

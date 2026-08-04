@@ -255,6 +255,54 @@ def _strip_extra(item: Any) -> dict[str, Any]:
     return {key: value for key, value in item.items() if key != "extra"}
 
 
+_TRAINING_TOKEN_KEYS = (
+    "prompt_token_ids",
+    "generation_token_ids",
+    "generation_log_probs",
+    "routed_experts",
+)
+
+
+def _extract_training_fields(message: dict[str, Any]) -> dict[str, Any]:
+    """Pull NeMo-RL training token fields off a chat-completion assistant message.
+
+    Gym's ``/v1/chat/completions`` path attaches these on the message itself when
+    ``return_token_id_information`` is true. LiteLLM / older adapters may nest them
+    under ``provider_specific_fields`` (same shape ``swe_agents`` / mini_swe v1 use).
+    """
+    sources: list[dict[str, Any]] = [message]
+    provider = message.get("provider_specific_fields")
+    if isinstance(provider, dict):
+        sources.append(provider)
+
+    fields: dict[str, Any] = {}
+    for key in _TRAINING_TOKEN_KEYS:
+        for source in sources:
+            if key in source and source[key] is not None:
+                fields[key] = source[key]
+                break
+
+    # NeMo-RL postprocess requires the full trio; skip incomplete captures.
+    if not all(key in fields for key in ("prompt_token_ids", "generation_token_ids", "generation_log_probs")):
+        return {}
+
+    fields["prompt_token_ids"] = [int(token_id) for token_id in fields["prompt_token_ids"]]
+    fields["generation_token_ids"] = [int(token_id) for token_id in fields["generation_token_ids"]]
+    fields["generation_log_probs"] = [float(log_prob) for log_prob in fields["generation_log_probs"]]
+    return fields
+
+
+def _attach_training_fields(item: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
+    """Attach training fields to the last trainable item of a model turn.
+
+    Mirrors ``ResponsesConverter.postprocess_assistant_message_dict``, which puts
+    token ids on the final output item of each model call (message or function_call).
+    """
+    if fields:
+        item.update(fields)
+    return item
+
+
 def _split_trajectory_for_responses(
     messages: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
@@ -275,11 +323,19 @@ def _split_trajectory_for_responses(
         if message.get("object") == "response":
             response = _strip_extra(message)
             raw_responses.append(response)
+            # Responses-native turns already carry training fields on output items
+            # when the policy model returned them; preserve them as-is.
             output_items.extend(_strip_extra(item) for item in response.get("output", []))
         elif role == "assistant":
             content = _message_content_to_text(message.get("content"))
-            if content:
-                output_items.append(
+            tool_calls = message.get("tool_calls") or []
+            training_fields = _extract_training_fields(message)
+            turn_items: list[dict[str, Any]] = []
+
+            # Match Gym's converter: emit an assistant message when there is text,
+            # or when the turn produced neither text nor tool calls (empty generation).
+            if content or not tool_calls:
+                turn_items.append(
                     {
                         "id": message.get("id") or f"msg_{uuid4()}",
                         "type": "message",
@@ -288,9 +344,9 @@ def _split_trajectory_for_responses(
                         "content": [{"type": "output_text", "text": content, "annotations": []}],
                     }
                 )
-            for tool_call in message.get("tool_calls") or []:
+            for tool_call in tool_calls:
                 function = tool_call.get("function") or {}
-                output_items.append(
+                turn_items.append(
                     {
                         "id": tool_call.get("id") or f"fc_{uuid4()}",
                         "type": "function_call",
@@ -299,6 +355,10 @@ def _split_trajectory_for_responses(
                         "arguments": function.get("arguments") or tool_call.get("arguments") or "{}",
                     }
                 )
+
+            if turn_items and training_fields:
+                turn_items[-1] = _attach_training_fields(turn_items[-1], training_fields)
+            output_items.extend(turn_items)
         elif role == "tool":
             output_items.append(
                 {
@@ -793,7 +853,6 @@ class MiniSWEAgent(SimpleResponsesAPIAgent):
                     run_golden=run_golden,
                     instance_id=instance_id,
                     config=config_path,
-                    # TODO: add this later
                     instance_dict=body.model_dump(),
                     responses_create_params=json.dumps(responses_create_params_dict),
                     step_timeout=step_timeout,
