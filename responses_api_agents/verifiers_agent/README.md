@@ -10,9 +10,30 @@ cd Gym
 uv venv; source .venv/bin/activate; uv sync
 ```
 
+## Environment packages are not shipped in `requirements.txt`
+
+`requirements.txt` carries the framework only — `nemo-gym` and `verifiers`. The environment
+package itself (`acereason-math`, `ascii-tree`, …) is chosen per run, so naming one here would
+install it into every consumer's agent venv and pin every consumer to the Prime Intellect
+index. Add the environment you want by one of two routes:
+
+- **Standalone:** append the index and the package to `requirements.txt`, as shown under
+  [Testing new prime environments](#testing-new-prime-environments-from-environments-hub).
+- **NeMo Platform:** the environment FileSet ships its own wheel closure under `wheels/`, and
+  the sandboxed Gym host installs it into this agent's venv offline, with no index involved.
+
 ## Test acereason-math example 
 
-First set `env.yaml`, for example for a vLLM served model:
+Add the example environment to `requirements.txt` first, so the agent venv Gym builds contains it:
+
+```
+-e nemo-gym[dev] @ ../../
+verifiers @ git+https://github.com/PrimeIntellect-ai/verifiers.git@v0.1.14
+--extra-index-url https://hub.primeintellect.ai/primeintellect/simple/
+acereason-math
+```
+
+Then set `env.yaml`, for example for a vLLM served model:
 ```
 policy_base_url: "http://localhost:8000/v1"
 policy_api_key: EMPTY
