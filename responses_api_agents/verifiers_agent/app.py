@@ -295,8 +295,14 @@ class VerifiersAgent(SimpleResponsesAPIAgent):
 
             # prefer NeMo RL generation config set in responses_create_params
             # https://github.com/NVIDIA-NeMo/RL/blob/main/nemo_rl/experience/rollouts.py#L1045-L1046
+            # max_output_tokens gets the same treatment as temperature/top_p: NeMo RL sets it
+            # on every row (_prepare_nemo_gym_rows), already reduced to min(row, max_new_tokens),
+            # so config.max_tokens is the fallback for standalone runs. Deliberately `or` and not
+            # `min`: as a ceiling this config would silently cap any job whose context is larger
+            # than it, and NeMo RL's vLLM server already clamps to the remaining context.
             sampling_args = {
-                "max_tokens": self.config.max_tokens,
+                "max_tokens": getattr(body.responses_create_params, "max_output_tokens", None)
+                or self.config.max_tokens,
                 "temperature": getattr(body.responses_create_params, "temperature", None) or self.config.temperature,
                 "top_p": getattr(body.responses_create_params, "top_p", None) or self.config.top_p,
             }
