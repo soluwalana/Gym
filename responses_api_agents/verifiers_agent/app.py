@@ -142,6 +142,12 @@ class VerifiersNeMoGymResponse(NeMoGymResponse):
     group_id: str
     output: list[dict[str, Any]]
     reward: float
+    # Ground truth for "generation was cut off rather than finishing", surfaced so NeMo RL
+    # does not have to infer it from token counts. verifiers derives it from the model
+    # server's finish_reason == "length" (clients/openai_chat_completions_client.py), sets
+    # it per turn on TrajectoryStep.is_truncated, and ORs it across turns into the rollout
+    # state, which state_to_output emits on every RolloutOutput.
+    is_truncated: bool = False
     metrics: dict[str, Any] = Field(default_factory=dict)
     parallel_tool_calls: bool = True
     tool_choice: str = "auto"
@@ -152,6 +158,7 @@ class VerifiersAgentVerifyResponse(BaseVerifyResponse):
     model_config = ConfigDict(extra="allow")
     response: VerifiersNeMoGymResponse
     reward: float
+    is_truncated: bool = False
 
 
 class VerifiersAgentConfig(BaseResponsesAPIAgentConfig):
@@ -317,6 +324,8 @@ class VerifiersAgent(SimpleResponsesAPIAgent):
             rollout_output = outputs[0]
             reward = rollout_output.get("reward", 0.0) or 0.0
             metrics = rollout_output.get("metrics", {}) or {}
+            # A standard RolloutOutput field, present whatever state_columns was asked for.
+            is_truncated = bool(rollout_output.get("is_truncated", False))
 
             output = self._convert_trajectory_to_output(rollout_output)
 
@@ -329,6 +338,7 @@ class VerifiersAgent(SimpleResponsesAPIAgent):
                 env_id=vf_env_id,
                 group_id=str(task_idx),
                 reward=reward,
+                is_truncated=is_truncated,
                 metrics=metrics,
             )
         except Exception as e:
@@ -348,6 +358,7 @@ class VerifiersAgent(SimpleResponsesAPIAgent):
             responses_create_params=body.responses_create_params,
             response=resp,
             reward=resp.reward,
+            is_truncated=resp.is_truncated,
         )
 
 

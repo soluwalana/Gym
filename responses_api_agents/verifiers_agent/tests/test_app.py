@@ -28,14 +28,18 @@ from responses_api_agents.verifiers_agent.app import (
 class _CapturingEnv:
     """Stands in for a verifiers Environment, recording the sampling args it is given."""
 
-    def __init__(self) -> None:
+    def __init__(self, is_truncated: bool = False) -> None:
         self.sampling_args: dict | None = None
+        self._is_truncated = is_truncated
 
     async def run_group(self, *, group_inputs, client, model, sampling_args, state_columns):
         self.sampling_args = sampling_args
         return [
             {
                 "reward": 1.0,
+                # A standard RolloutOutput field (verifiers utils/save_utils.py), emitted
+                # regardless of state_columns.
+                "is_truncated": self._is_truncated,
                 "completion": [{"role": "assistant", "content": "answer"}],
                 "trajectory": [
                     {
@@ -186,3 +190,33 @@ class TestApp:
         await agent.responses(MagicMock(), MagicMock(), _request())
 
         assert env.sampling_args == {"max_tokens": 4096, "temperature": 0.5, "top_p": 0.8}
+
+    async def test_surfaces_is_truncated_from_the_rollout(self, monkeypatch) -> None:
+        """NeMo RL masks truncated samples out of the GRPO loss, and this is the only
+        place the ground truth is available: verifiers derives it from the model server's
+        finish_reason == "length". Without it NeMo RL has to guess from token counts.
+        """
+        env = _CapturingEnv(is_truncated=True)
+        agent = _agent(monkeypatch, env)
+
+        resp = await agent.responses(MagicMock(), MagicMock(), _request())
+
+        assert resp.is_truncated is True
+
+    async def test_is_truncated_defaults_false_when_the_rollout_omits_it(self, monkeypatch) -> None:
+        env = _CapturingEnv()
+        agent = _agent(monkeypatch, env)
+
+        resp = await agent.responses(MagicMock(), MagicMock(), _request())
+
+        assert resp.is_truncated is False
+
+    async def test_run_hoists_is_truncated_beside_reward(self, monkeypatch) -> None:
+        """NeMo RL reads the verify response, not the nested one, so it has to appear there."""
+        env = _CapturingEnv(is_truncated=True)
+        agent = _agent(monkeypatch, env)
+
+        verify = await agent.run(MagicMock(), MagicMock(), _request())
+
+        assert verify.is_truncated is True
+        assert verify.response.is_truncated is True
