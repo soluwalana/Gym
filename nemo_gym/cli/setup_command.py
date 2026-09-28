@@ -103,6 +103,11 @@ def _get_nemo_gym_version_spec(is_editable_install: bool) -> str:
         return ""
 
 
+def _shell_quote_pip_specs(specs) -> str:
+    """Quote PEP 508 specs for bash. ``setuptools<81`` is otherwise a stdin redirect."""
+    return " ".join(shlex.quote(str(spec)) for spec in specs)
+
+
 def get_venv_path(dir_path: Path, global_config_dict: DictConfig) -> Path:
     """Return the server venv path for the configured venv root."""
     root_venv_path = Path(global_config_dict[UV_VENV_DIR_KEY_NAME])
@@ -112,7 +117,7 @@ def get_venv_path(dir_path: Path, global_config_dict: DictConfig) -> Path:
 
 
 def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: str) -> str:
-    head_server_deps = global_config_dict[HEAD_SERVER_DEPS_KEY_NAME]
+    head_server_deps = _shell_quote_pip_specs(global_config_dict[HEAD_SERVER_DEPS_KEY_NAME])
 
     venv_path = get_venv_path(dir_path, global_config_dict)
 
@@ -149,7 +154,7 @@ def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: st
         elif has_pyproject_toml:
             if is_editable_install:
                 install_cmd = (
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}'-e .' {" ".join(head_server_deps)}"""
+                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}'-e .' {head_server_deps}"""
                 )
             else:
                 # install nemo-gym from pypi instead of relative path in pyproject.toml
@@ -158,13 +163,13 @@ def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: st
                 version_spec = _get_nemo_gym_version_spec(is_editable_install)
                 install_cmd = (
                     f"""uv pip install {verbose_flag}{uv_pip_python_flag}{install_flags}nemo-gym{version_spec} && """
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}--no-sources '-e .' {" ".join(head_server_deps)}"""
+                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}--no-sources '-e .' {head_server_deps}"""
                 )
         elif has_requirements_txt:
             has_overrides_txt = (dir_path / "overrides.txt").exists()
             override_flag = "--override overrides.txt " if has_overrides_txt else ""
             if is_editable_install:
-                install_cmd = f"""uv pip install {verbose_flag}{uv_pip_python_flag}{override_flag}-r requirements.txt {" ".join(head_server_deps)}"""
+                install_cmd = f"""uv pip install {verbose_flag}{uv_pip_python_flag}{override_flag}-r requirements.txt {head_server_deps}"""
             else:
                 # install nemo-gym from pypi instead of relative path in requirements.txt
                 # with support for pre-releases, custom indexes, and version pinning
@@ -172,7 +177,7 @@ def setup_env_command(dir_path: Path, global_config_dict: DictConfig, prefix: st
                 version_spec = _get_nemo_gym_version_spec(is_editable_install)
                 install_cmd = (
                     f"""(echo 'nemo-gym{version_spec}' && grep -v -F '../..' requirements.txt) | """
-                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}{install_flags}{override_flag}-r /dev/stdin {" ".join(head_server_deps)}"""
+                    f"""uv pip install {verbose_flag}{uv_pip_python_flag}{install_flags}{override_flag}-r /dev/stdin {head_server_deps}"""
                 )
         else:
             raise RuntimeError(
