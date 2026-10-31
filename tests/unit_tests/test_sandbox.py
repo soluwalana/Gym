@@ -1042,7 +1042,7 @@ async def _assert_opensandbox_sdk_create_receives_default_image_pull_policy(monk
     monkeypatch.setattr(
         opensandbox_provider_module,
         "_require_opensandbox_sdk",
-        lambda: (FakeSDKSandbox, object, object, object, object),
+        lambda: (FakeSDKSandbox, object, object, object, object, object),
     )
 
     provider = OpenSandboxProvider(probe={"command": None})
@@ -1099,7 +1099,7 @@ async def _assert_opensandbox_connect_after_create_preserves_request_timeout(mon
     monkeypatch.setattr(
         opensandbox_provider_module,
         "_require_opensandbox_sdk",
-        lambda: (FakeSDKSandbox, FakeConnectionConfig, object, object, object),
+        lambda: (FakeSDKSandbox, FakeConnectionConfig, object, object, object, object),
     )
 
     provider = OpenSandboxProvider(
@@ -1292,7 +1292,7 @@ async def _assert_opensandbox_exec_retries_retryable_sdk_failures(monkeypatch) -
     monkeypatch.setattr(
         opensandbox_provider_module,
         "_require_opensandbox_sdk",
-        lambda: (object, object, FakeRunCommandOpts, object, object),
+        lambda: (object, object, FakeRunCommandOpts, object, object, object),
     )
 
     provider = OpenSandboxProvider(
@@ -1342,7 +1342,7 @@ async def _assert_opensandbox_command_retries_default_to_disabled(monkeypatch) -
     monkeypatch.setattr(
         opensandbox_provider_module,
         "_require_opensandbox_sdk",
-        lambda: (object, object, FakeRunCommandOpts, object, object),
+        lambda: (object, object, FakeRunCommandOpts, object, object, object),
     )
 
     provider = OpenSandboxProvider(

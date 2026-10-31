@@ -1717,6 +1717,10 @@ Set the keys individually, in a config or as overrides, e.g.:
                     "openai from nemo-gym's own constraint (the parent and the servers then run "
                     "different openai versions across the HTTP boundary)."
                 )
+            # hydra-core 1.3 imports pkg_resources at import time and nothing in the
+            # dependency chain declares setuptools, which `uv venv --seed` stopped
+            # installing on Python 3.12+. 81 is the release that removed pkg_resources.
+            head_server_deps.append("setuptools<81")
             # Telemetry, when enabled. Server venvs install nemo-gym[dev], not
             # nemo-gym[telemetry], so without this the supervisor would export spans and
             # every server process would silently have no telemetry at all — a trace with a

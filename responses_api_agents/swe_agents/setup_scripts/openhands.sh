@@ -61,9 +61,11 @@ if [ ! -f "$miniforge_dir/bin/jq" ]; then
     chmod +x "$miniforge_dir/bin/jq"
 fi
 
+# No `|| true` here: an unrunnable jq (e.g. an x86-64 binary on arm64) used to pass this check
+# silently and only surface much later, inside a build step that uses it.
 echo "Verifying jq installation..."
 which jq
-jq --version || true
+jq --version
 
 
 # Verify installations
