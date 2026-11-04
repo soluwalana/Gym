@@ -573,7 +573,10 @@ class ResponsesConverter(BaseModel):
         assert "call_id" in m
         output = m["output"]
         if isinstance(output, str):
-            content = output
+            if self.inline_tool_output_images and output.startswith("data:image/"):
+                content = [{"type": "image_url", "image_url": {"url": output, "detail": "auto"}}]
+            else:
+                content = output
         elif isinstance(output, list):
             # Chat tool messages carry text only in OpenAI's API, so every other part type fails the
             # conversion. Image parts are the exception: `inline_tool_output_images` keeps each one as an

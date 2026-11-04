@@ -671,6 +671,33 @@ def inlining_converter() -> ResponsesConverter:
     return ResponsesConverter(return_token_id_information=False, inline_tool_output_images=True)
 
 
+def test_inline_tool_output_images_inlines_a_data_url_string(inlining_converter: ResponsesConverter):
+    params = inlining_converter.responses_to_chat_completion_create_params(
+        NeMoGymResponseCreateParamsNonStreaming(
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": PNG_URL}]
+        )
+    )
+
+    assert params.messages == [
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "image_url", "image_url": {"url": PNG_URL, "detail": "auto"}}],
+        }
+    ]
+
+
+def test_a_data_url_tool_output_stays_text_without_inlining():
+    converter = ResponsesConverter(return_token_id_information=False)
+    params = converter.responses_to_chat_completion_create_params(
+        NeMoGymResponseCreateParamsNonStreaming(
+            input=[{"type": "function_call_output", "call_id": "call_1", "output": PNG_URL}]
+        )
+    )
+
+    assert params.messages[0]["content"] == PNG_URL
+
+
 def test_inline_tool_output_images_keeps_each_image_in_the_tool_message(inlining_converter: ResponsesConverter):
     params = inlining_converter.responses_to_chat_completion_create_params(
         _tool_output_params(
